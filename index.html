@@ -210,7 +210,7 @@ footer strong{color:var(--saffron);font-family:var(--font-display);font-size:15p
 // CONFIG — paste your Google Sheet publish URL here after setup
 // Instructions: open index.html and find this line, paste URL inside the quotes
 const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRwgzQHfx6fgCiNopn7MmrIoJMJQwnDxSdjVDtGkYzkdjebNcCit1zfyurqcJ3LGhAtQOcuRo-5m9OM/pub?output=csv";
-const SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/1yqgn0lXjCTvBAMJ8MiYh-hnUbl9s0ZyQPxiWft3Z8cQ/edit?usp=sharing"; // optional: paste editable sheet link here
+const SHEET_EDIT_URL = ""; // optional: paste editable sheet link here
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyiADx9m1s6rEcrPOOPhLjAdXSCRBz9lRcbU0zD5LodWCnhxYQlnS4w3iR1CB2NwUMW/exec"; // paste your Google Apps Script web app URL here
 // ─────────────────────────────────────────────
 
@@ -281,23 +281,48 @@ let curMonth,curYear,allEvents=[];
 const today=new Date();
 
 function parseCSV(text){
-  const lines=text.trim().split('\n').slice(1);
-  return lines.map(l=>{
-    const cols=l.split(',').map(c=>c.replace(/^"|"$/g,'').trim());
-    const [name,type,monthStr,day]=cols;
+  // Sheet format: Day | Month | Birthday(s) | Anniversary
+  const lines=text.trim().split('\n').slice(1); // skip header
+  const events=[];
+  for(const line of lines){
+    // Handle quoted fields properly
+    const cols=[];
+    let cur='',inQ=false;
+    for(let i=0;i<line.length;i++){
+      if(line[i]==='"'){inQ=!inQ;}
+      else if(line[i]===','&&!inQ){cols.push(cur.trim());cur='';}
+      else cur+=line[i];
+    }
+    cols.push(cur.trim());
+    const day=parseInt(cols[0]);
+    const monthStr=(cols[1]||'').trim();
+    const bdays=(cols[2]||'').replace(/"/g,'').trim();
+    const annivs=(cols[3]||'').replace(/"/g,'').trim();
     const m=MONTHS.indexOf(monthStr)+1;
-    if(!name||!type||m<1||!day)return null;
-    return{n:name,t:type.toLowerCase(),m,d:parseInt(day)};
-  }).filter(Boolean);
+    if(isNaN(day)||m<1)continue; // skip month headers and invalid rows
+    // Split multiple names by comma (but names with & are single entries)
+    if(bdays){
+      bdays.split(/,(?![^(]*\))/).map(n=>n.trim()).filter(Boolean)
+        .forEach(n=>events.push({n,t:'birthday',m,d:day}));
+    }
+    if(annivs){
+      annivs.split(/,(?![^(]*\))/).map(n=>n.trim()).filter(Boolean)
+        .forEach(n=>events.push({n,t:'anniversary',m,d:day}));
+    }
+  }
+  return events;
 }
 
 async function loadEvents(){
   let base=SEED;
   if(SHEET_CSV_URL){
     try{
-      const res=await fetch(SHEET_CSV_URL);
-      if(res.ok){const text=await res.text();base=parseCSV(text);}
-    }catch(e){console.log('Sheet fetch failed, using seed data');}
+      const timeout=new Promise((_,rej)=>setTimeout(()=>rej('timeout'),5000));
+      const fetchP=fetch(SHEET_CSV_URL).then(r=>r.ok?r.text():Promise.reject('not ok'));
+      const text=await Promise.race([fetchP,timeout]);
+      const parsed=parseCSV(text);
+      if(parsed.length>0){base=parsed;}
+    }catch(e){console.log('Sheet unavailable, using built-in data.');}
   }
   let extra=[];
   try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)extra=JSON.parse(raw);}catch(e){}
